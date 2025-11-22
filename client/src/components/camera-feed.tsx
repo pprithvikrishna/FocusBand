@@ -27,11 +27,11 @@ export function CameraFeed({ isActive, onDataUpdate }: CameraFeedProps) {
         await tf.ready();
         
         const model = faceLandmarksDetection.SupportedModels.MediaPipeFaceMesh;
-        const detectorConfig: faceLandmarksDetection.MediaPipeFaceMeshMediaPipeModelConfig = {
-          runtime: 'mediapipe',
-          solutionPath: 'https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh',
-          refineLandmarks: true,
+        const detectorConfig: faceLandmarksDetection.MediaPipeFaceMeshTfjsModelConfig = {
+        runtime: 'tfjs',
+        refineLandmarks: true,
         };
+
         
         const detector = await faceLandmarksDetection.createDetector(model, detectorConfig);
         detectorRef.current = detector;
