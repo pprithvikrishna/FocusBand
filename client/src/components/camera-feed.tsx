@@ -1,6 +1,6 @@
 import { useRef, useEffect, useState } from "react";
 import * as tf from "@tensorflow/tfjs";
-import "@tensorflow/tfjs-backend-webgl"; // ensure webgl backend is available
+import "@tensorflow/tfjs-backend-webgl"; // ensure WebGL backend is available
 import * as faceLandmarksDetection from "@tensorflow-models/face-landmarks-detection";
 import type { LiveAttentionData } from "@shared/schema";
 
@@ -21,39 +21,45 @@ export function CameraFeed({ isActive, onDataUpdate }: CameraFeedProps) {
   const blinkCount = useRef<number>(0);
   const blinkWindowStart = useRef<number>(Date.now());
 
+  // ---------------- MODEL INITIALIZATION ----------------
   useEffect(() => {
     let mounted = true;
 
     const initializeModel = async () => {
       try {
-        console.log("[FocusBand] tf.ready()");
+        console.log("[FocusBand] Initializing TF backend…");
         setIsModelLoading(true);
 
-        // Ensure TF backend is ready and set to webgl for best performance
+        // Try WebGL, fall back to CPU
+        try {
+          await tf.setBackend("webgl");
+        } catch (e) {
+          console.warn("[FocusBand] webgl backend failed, falling back to cpu", e);
+          await tf.setBackend("cpu");
+        }
+
         await tf.ready();
-        await tf.setBackend("webgl");
-        await tf.ready(); // ensure backend switched
         console.log("[FocusBand] TF backend:", tf.getBackend());
 
         const model = faceLandmarksDetection.SupportedModels.MediaPipeFaceMesh;
 
         const detectorConfig: faceLandmarksDetection.MediaPipeFaceMeshTfjsModelConfig = {
-          runtime: "tfjs", // use tfjs runtime (no wasm/CDN cross-origin issues)
+          runtime: "tfjs",
           refineLandmarks: true,
-          // maxFaces isn't part of this config type strictly but createDetector accepts
-          // options in the detector creation too — we'll rely on default of 1
+          // maxFaces: 1, // optional
         };
 
-        console.log("[FocusBand] Creating detector...");
+        console.log("[FocusBand] Creating detector (tfjs)...");
         const detector = await faceLandmarksDetection.createDetector(model, detectorConfig);
         console.log("[FocusBand] Detector created:", !!detector);
 
-        if (mounted) {
-          detectorRef.current = detector;
-          setIsModelLoading(false);
-        } else {
+        if (!mounted) {
           detector?.dispose?.();
+          return;
         }
+
+        detectorRef.current = detector;
+        setIsModelLoading(false);
       } catch (err) {
         console.error("[FocusBand] Error loading model:", err);
         setError("Failed to load AI model");
@@ -68,12 +74,15 @@ export function CameraFeed({ isActive, onDataUpdate }: CameraFeedProps) {
       if (detectorRef.current) {
         try {
           detectorRef.current.dispose();
-        } catch {}
+        } catch {
+          // ignore
+        }
         detectorRef.current = null;
       }
     };
   }, []);
 
+  // ---------------- CAMERA CONTROL ----------------
   useEffect(() => {
     if (isActive && !isModelLoading) {
       startCamera();
@@ -84,6 +93,7 @@ export function CameraFeed({ isActive, onDataUpdate }: CameraFeedProps) {
     return () => {
       stopCamera();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isActive, isModelLoading]);
 
   const startCamera = async () => {
@@ -97,11 +107,15 @@ export function CameraFeed({ isActive, onDataUpdate }: CameraFeedProps) {
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         streamRef.current = stream;
+
         videoRef.current.onloadedmetadata = () => {
-          console.log("[FocusBand] Video metadata loaded", videoRef.current?.videoWidth, videoRef.current?.videoHeight);
+          console.log(
+            "[FocusBand] Video metadata loaded",
+            videoRef.current?.videoWidth,
+            videoRef.current?.videoHeight
+          );
           videoRef.current?.play();
-          // start detection loop (it will early-return until model + video ready)
-          detectFaces();
+          detectFaces(); // start detection loop
         };
       }
     } catch (err) {
@@ -117,7 +131,7 @@ export function CameraFeed({ isActive, onDataUpdate }: CameraFeedProps) {
     }
 
     if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current.getTracks().forEach((track) => track.stop());
       streamRef.current = null;
     }
 
@@ -126,6 +140,7 @@ export function CameraFeed({ isActive, onDataUpdate }: CameraFeedProps) {
     }
   };
 
+  // ---------------- UTILITIES ----------------
   const calculateEAR = (eye: number[][]) => {
     const verticalDist1 = Math.hypot(eye[1][0] - eye[5][0], eye[1][1] - eye[5][1]);
     const verticalDist2 = Math.hypot(eye[2][0] - eye[4][0], eye[2][1] - eye[4][1]);
@@ -133,8 +148,8 @@ export function CameraFeed({ isActive, onDataUpdate }: CameraFeedProps) {
     return (verticalDist1 + verticalDist2) / (2.0 * horizontalDist);
   };
 
+  // ---------------- MAIN DETECTION LOOP ----------------
   const detectFaces = async () => {
-    // keep loop running even if early-return so we can recover
     try {
       const detector = detectorRef.current;
       const video = videoRef.current;
@@ -151,36 +166,35 @@ export function CameraFeed({ isActive, onDataUpdate }: CameraFeedProps) {
         return;
       }
 
-      // Wait until video has enough data
+      // Wait for video + model to be ready
       if (video.readyState < 2 || !detector) {
-        // log helpful info occasionally
-        // (don't spam logs every frame — only log if model is still loading)
         if (isModelLoading) {
-          console.log("[FocusBand] Waiting for model/video to be ready...", { readyState: video.readyState, detector: !!detector });
+          console.log("[FocusBand] Waiting for video/model…", {
+            readyState: video.readyState,
+            detector: !!detector,
+          });
         }
         animationFrameRef.current = requestAnimationFrame(detectFaces);
         return;
       }
 
-      // set canvas size to match video
+      // Match canvas to video size
       canvas.width = video.videoWidth || 640;
       canvas.height = video.videoHeight || 480;
 
-      // estimate faces from video element
-      const faces = await detector.estimateFaces(video as HTMLVideoElement);
+      const estimationConfig: faceLandmarksDetection.MediaPipeFaceMeshTfjsEstimationConfig = {
+        flipHorizontal: true, // mirror for front camera
+      };
 
-      // debug log (throttled by requestAnimationFrame)
-      // eslint-disable-next-line no-console
+      const faces = await detector.estimateFaces(video as HTMLVideoElement, estimationConfig);
       console.log("[FocusBand] Faces found:", faces.length);
 
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
       if (faces.length > 0) {
-        const face = faces[0];
-        // face.keypoints may be objects with x,y properties
-        const keypoints = (face as any).keypoints || (face as any).scaledMesh || [];
+        const face = faces[0] as any;
+        const keypoints = face.keypoints || face.scaledMesh || [];
 
-        // If keypoints are as objects: convert to {x,y}
         const normalizedKeypoints: { x: number; y: number }[] = keypoints.map((kp: any) => {
           if (Array.isArray(kp)) {
             return { x: kp[0], y: kp[1] };
@@ -188,22 +202,27 @@ export function CameraFeed({ isActive, onDataUpdate }: CameraFeedProps) {
           return { x: kp.x ?? kp[0], y: kp.y ?? kp[1] };
         });
 
-        // Draw small points for landmarks
+        // Draw face landmarks
         ctx.fillStyle = "#22c55e";
-        for (let i = 0; i < normalizedKeypoints.length; i++) {
-          const p = normalizedKeypoints[i];
+        for (const p of normalizedKeypoints) {
           if (!p || Number.isNaN(p.x) || Number.isNaN(p.y)) continue;
           ctx.beginPath();
           ctx.arc(p.x, p.y, 1.5, 0, Math.PI * 2);
           ctx.fill();
         }
 
-        // Extract eye landmarks by indices (ensure indices exist)
         const safe = (i: number) => normalizedKeypoints[i] ?? { x: 0, y: 0 };
-        const leftEye = [safe(33), safe(160), safe(158), safe(133), safe(153), safe(144)].map(kp => [kp.x, kp.y]);
-        const rightEye = [safe(362), safe(385), safe(387), safe(263), safe(373), safe(380)].map(kp => [kp.x, kp.y]);
 
-        // Calculate EAR
+        const leftEye = [safe(33), safe(160), safe(158), safe(133), safe(153), safe(144)].map((kp) => [
+          kp.x,
+          kp.y,
+        ]);
+        const rightEye = [safe(362), safe(385), safe(387), safe(263), safe(373), safe(380)].map((kp) => [
+          kp.x,
+          kp.y,
+        ]);
+
+        // EAR
         const leftEAR = calculateEAR(leftEye);
         const rightEAR = calculateEAR(rightEye);
         const avgEAR = (leftEAR + rightEAR) / 2;
@@ -211,32 +230,38 @@ export function CameraFeed({ isActive, onDataUpdate }: CameraFeedProps) {
         // Blink detection
         const EAR_THRESHOLD = 0.2;
         const now = Date.now();
+
         if (avgEAR < EAR_THRESHOLD && now - lastBlinkTime.current > 300) {
           blinkCount.current++;
           lastBlinkTime.current = now;
         }
+
         if (now - blinkWindowStart.current > 10000) {
           blinkWindowStart.current = now;
           blinkCount.current = 0;
         }
-        const blinkRate = (blinkCount.current / ((now - blinkWindowStart.current) / 1000)) * 60;
 
-        // Gaze (simplified)
+        const blinkRate =
+          (blinkCount.current / ((now - blinkWindowStart.current) / 1000)) * 60;
+
+        // Gaze & head pose (rough)
         const noseTip = safe(1);
         const faceCenter = {
           x: (safe(234).x + safe(454).x) / 2,
           y: (safe(10).y + safe(152).y) / 2,
         };
+
         const gazeOffsetX = noseTip.x - faceCenter.x;
         const gazeOffsetY = noseTip.y - faceCenter.y;
-        let gazeDirection = "center";
+
+        let gazeDirection: LiveAttentionData["gazeDirection"] = "center";
         if (Math.abs(gazeOffsetX) > 15) gazeDirection = gazeOffsetX > 0 ? "right" : "left";
         else if (Math.abs(gazeOffsetY) > 15) gazeDirection = gazeOffsetY > 0 ? "down" : "up";
 
         const headYaw = gazeOffsetX * 0.5;
         const headPitch = gazeOffsetY * 0.5;
 
-        // Attention score (your original logic)
+        // Attention score
         let attentionScore = 100;
         if (avgEAR < 0.25) attentionScore -= 20;
         if (gazeDirection !== "center") attentionScore -= 30;
@@ -272,8 +297,16 @@ export function CameraFeed({ isActive, onDataUpdate }: CameraFeedProps) {
   };
 
   return (
-    <div className="relative w-full bg-muted rounded-lg overflow-hidden" style={{ aspectRatio: "4/3" }}>
-      <video ref={videoRef} className="absolute inset-0 w-full h-full object-cover" playsInline muted />
+    <div
+      className="relative w-full bg-muted rounded-lg overflow-hidden"
+      style={{ aspectRatio: "4/3" }}
+    >
+      <video
+        ref={videoRef}
+        className="absolute inset-0 w-full h-full object-cover"
+        playsInline
+        muted
+      />
       <canvas ref={canvasRef} className="absolute inset-0 w-full h-full" />
 
       {isModelLoading && (
@@ -291,7 +324,7 @@ export function CameraFeed({ isActive, onDataUpdate }: CameraFeedProps) {
         </div>
       )}
 
-      {!isActive && !isModelLoading && (
+      {!isActive && !isModelLoading && !error && (
         <div className="absolute inset-0 flex items-center justify-center bg-muted">
           <p className="text-sm text-muted-foreground">Camera inactive</p>
         </div>
