@@ -362,7 +362,7 @@ export default function ActiveSession() {
   };
 
   // 🔵 BLE: function to connect to the Fire-Boltt watch
-  async function connectWatch() {
+    async function connectWatch() {
     try {
       const nav: any = navigator;
 
@@ -371,34 +371,87 @@ export default function ActiveSession() {
         return;
       }
 
+      // 1️⃣ Let the user pick ANY Bluetooth device,
+      //    but say we might use these extra services if they exist.
       const device: BluetoothDevice = await nav.bluetooth.requestDevice({
-        filters: [
-          {
-            services: [0xAE01] // primary custom service we want
-          }
-        ],
+        acceptAllDevices: true,
         optionalServices: [0xAE01, 0xFEEA, 0x190E]
       });
 
       console.log("[FocusBand] Selected device:", device.name || device.id);
       setBleDevice(device);
 
+      // 2️⃣ Connect to GATT server
       const server = await device.gatt?.connect();
       if (!server) {
         alert("Failed to connect to watch.");
         return;
       }
 
-      const service = await server.getPrimaryService(0xAE01);
-      const characteristic = await service.getCharacteristic(0xAE01); // WRITE NO RESPONSE
+      console.log("[FocusBand] Connected to GATT server");
+
+      // 3️⃣ Try to get the AE01 service first
+      let service: BluetoothRemoteGATTService | null = null;
+      try {
+        service = await server.getPrimaryService(0xAE01);
+        console.log("[FocusBand] Using service 0xAE01");
+      } catch (e) {
+        console.warn("[FocusBand] Service 0xAE01 not found, trying 0xFEEA...", e);
+        try {
+          service = await server.getPrimaryService(0xFEEA);
+          console.log("[FocusBand] Using service 0xFEEA");
+        } catch (e2) {
+          console.warn("[FocusBand] Service 0xFEEA not found, trying 0x190E...", e2);
+          try {
+            service = await server.getPrimaryService(0x190E);
+            console.log("[FocusBand] Using service 0x190E");
+          } catch (e3) {
+            console.error("[FocusBand] No known services found on device", e3);
+            alert("Connected to device, but no compatible service (AE01/FEEA/190E) was found.");
+            return;
+          }
+        }
+      }
+
+      if (!service) {
+        alert("No compatible service found on the watch.");
+        return;
+      }
+
+      // 4️⃣ Try to get a writable characteristic
+      let characteristic: BluetoothRemoteGATTCharacteristic | null = null;
+
+      // First try AE01 characteristic (if service UUID is AE01)
+      try {
+        characteristic = await service.getCharacteristic(0xAE01);
+        console.log("[FocusBand] Using characteristic 0xAE01");
+      } catch {
+        // Try the ones you saw as WRITE NO RESPONSE
+        const candidateUUIDs = [0xFEE2, 0xFEE5, 0xFEE6, 0x0004]; // all WRITE NO RESPONSE ones from your scan
+        for (const uuid of candidateUUIDs) {
+          try {
+            characteristic = await service.getCharacteristic(uuid);
+            console.log("[FocusBand] Using characteristic", uuid.toString(16));
+            break;
+          } catch (err) {
+            console.warn("[FocusBand] Characteristic", uuid.toString(16), "not found on this service");
+          }
+        }
+      }
+
+      if (!characteristic) {
+        alert("Could not find a writable characteristic on the watch.");
+        return;
+      }
 
       setBleCharacteristic(characteristic);
-      alert("Watch connected on service AE01!");
+      alert("Watch connected! (We found a writable characteristic)");
     } catch (err) {
       console.error("[FocusBand] Error connecting to watch:", err);
-      alert("Could not connect to watch. Check Bluetooth and try again.");
+      alert("Could not connect to watch. Make sure it is NOT already connected in Bluetooth settings, then try again.");
     }
   }
+
 
   // 🔵 BLE: whenever attentionScore changes, send a signal if watch is connected
   useEffect(() => {
