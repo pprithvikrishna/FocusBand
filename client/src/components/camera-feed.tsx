@@ -150,151 +150,163 @@ export function CameraFeed({ isActive, onDataUpdate }: CameraFeedProps) {
 
   // ---------------- MAIN DETECTION LOOP ----------------
   const detectFaces = async () => {
-    try {
-      const detector = detectorRef.current;
-      const video = videoRef.current;
-      const canvas = canvasRef.current;
+  try {
+    const detector = detectorRef.current;
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
 
-      if (!canvas || !video) {
-        animationFrameRef.current = requestAnimationFrame(detectFaces);
-        return;
+    if (!canvas || !video) {
+      animationFrameRef.current = requestAnimationFrame(detectFaces);
+      return;
+    }
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      animationFrameRef.current = requestAnimationFrame(detectFaces);
+      return;
+    }
+
+    // Wait for video + model to be ready
+    if (video.readyState < 2 || !detector) {
+      if (isModelLoading) {
+        console.log("[FocusBand] Waiting for video/model…", {
+          readyState: video.readyState,
+          detector: !!detector,
+        });
       }
+      animationFrameRef.current = requestAnimationFrame(detectFaces);
+      return;
+    }
 
-      const ctx = canvas.getContext("2d");
-      if (!ctx) {
-        animationFrameRef.current = requestAnimationFrame(detectFaces);
-        return;
-      }
+    // Match canvas to video size
+    const width = video.videoWidth || 640;
+    const height = video.videoHeight || 480;
+    canvas.width = width;
+    canvas.height = height;
 
-      // Wait for video + model to be ready
-      if (video.readyState < 2 || !detector) {
-        if (isModelLoading) {
-          console.log("[FocusBand] Waiting for video/model…", {
-            readyState: video.readyState,
-            detector: !!detector,
-          });
+    // Draw the current frame to the canvas (mirrored so user sees themselves)
+    ctx.save();
+    ctx.scale(-1, 1);
+    ctx.drawImage(video, -width, 0, width, height);
+    ctx.restore();
+
+    // 🔴 KEY CHANGE: use a Tensor as input
+    const inputTensor = tf.browser.fromPixels(canvas);
+
+    const estimationConfig: faceLandmarksDetection.MediaPipeFaceMeshTfjsEstimationConfig = {
+      flipHorizontal: false, // we already mirrored using the canvas
+    };
+
+    const faces = await detector.estimateFaces(inputTensor as any, estimationConfig);
+    inputTensor.dispose(); // free GPU memory
+
+    console.log("[FocusBand] Faces found:", faces.length);
+
+    // We only want to draw landmarks now (video already visible behind)
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    if (faces.length > 0) {
+      const face = faces[0] as any;
+      const keypoints = face.keypoints || face.scaledMesh || [];
+
+      const normalizedKeypoints: { x: number; y: number }[] = keypoints.map((kp: any) => {
+        if (Array.isArray(kp)) {
+          return { x: kp[0], y: kp[1] };
         }
-        animationFrameRef.current = requestAnimationFrame(detectFaces);
-        return;
+        return { x: kp.x ?? kp[0], y: kp.y ?? kp[1] };
+      });
+
+      // Draw face landmarks
+      ctx.fillStyle = "#22c55e";
+      for (const p of normalizedKeypoints) {
+        if (!p || Number.isNaN(p.x) || Number.isNaN(p.y)) continue;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 1.5, 0, Math.PI * 2);
+        ctx.fill();
       }
 
-      // Match canvas to video size
-      canvas.width = video.videoWidth || 640;
-      canvas.height = video.videoHeight || 480;
+      const safe = (i: number) => normalizedKeypoints[i] ?? { x: 0, y: 0 };
 
-      const estimationConfig: faceLandmarksDetection.MediaPipeFaceMeshTfjsEstimationConfig = {
-        flipHorizontal: true, // mirror for front camera
+      const leftEye = [safe(33), safe(160), safe(158), safe(133), safe(153), safe(144)].map(
+        (kp) => [kp.x, kp.y]
+      );
+      const rightEye = [safe(362), safe(385), safe(387), safe(263), safe(373), safe(380)].map(
+        (kp) => [kp.x, kp.y]
+      );
+
+      // EAR
+      const leftEAR = calculateEAR(leftEye);
+      const rightEAR = calculateEAR(rightEye);
+      const avgEAR = (leftEAR + rightEAR) / 2;
+
+      // Blink detection
+      const EAR_THRESHOLD = 0.2;
+      const now = Date.now();
+
+      if (avgEAR < EAR_THRESHOLD && now - lastBlinkTime.current > 300) {
+        blinkCount.current++;
+        lastBlinkTime.current = now;
+      }
+
+      if (now - blinkWindowStart.current > 10000) {
+        blinkWindowStart.current = now;
+        blinkCount.current = 0;
+      }
+
+      const blinkRate =
+        (blinkCount.current / ((now - blinkWindowStart.current) / 1000)) * 60;
+
+      // Gaze & head pose (rough)
+      const noseTip = safe(1);
+      const faceCenter = {
+        x: (safe(234).x + safe(454).x) / 2,
+        y: (safe(10).y + safe(152).y) / 2,
       };
 
-      const faces = await detector.estimateFaces(video as HTMLVideoElement, estimationConfig);
-      console.log("[FocusBand] Faces found:", faces.length);
+      const gazeOffsetX = noseTip.x - faceCenter.x;
+      const gazeOffsetY = noseTip.y - faceCenter.y;
 
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      let gazeDirection: LiveAttentionData["gazeDirection"] = "center";
+      if (Math.abs(gazeOffsetX) > 15) gazeDirection = gazeOffsetX > 0 ? "right" : "left";
+      else if (Math.abs(gazeOffsetY) > 15) gazeDirection = gazeOffsetY > 0 ? "down" : "up";
 
-      if (faces.length > 0) {
-        const face = faces[0] as any;
-        const keypoints = face.keypoints || face.scaledMesh || [];
+      const headYaw = gazeOffsetX * 0.5;
+      const headPitch = gazeOffsetY * 0.5;
 
-        const normalizedKeypoints: { x: number; y: number }[] = keypoints.map((kp: any) => {
-          if (Array.isArray(kp)) {
-            return { x: kp[0], y: kp[1] };
-          }
-          return { x: kp.x ?? kp[0], y: kp.y ?? kp[1] };
-        });
+      // Attention score
+      let attentionScore = 100;
+      if (avgEAR < 0.25) attentionScore -= 20;
+      if (gazeDirection !== "center") attentionScore -= 30;
+      if (Math.abs(headYaw) > 20 || Math.abs(headPitch) > 20) attentionScore -= 25;
+      if (blinkRate > 30) attentionScore -= 10;
+      attentionScore = Math.max(0, Math.min(100, attentionScore));
 
-        // Draw face landmarks
-        ctx.fillStyle = "#22c55e";
-        for (const p of normalizedKeypoints) {
-          if (!p || Number.isNaN(p.x) || Number.isNaN(p.y)) continue;
-          ctx.beginPath();
-          ctx.arc(p.x, p.y, 1.5, 0, Math.PI * 2);
-          ctx.fill();
-        }
-
-        const safe = (i: number) => normalizedKeypoints[i] ?? { x: 0, y: 0 };
-
-        const leftEye = [safe(33), safe(160), safe(158), safe(133), safe(153), safe(144)].map((kp) => [
-          kp.x,
-          kp.y,
-        ]);
-        const rightEye = [safe(362), safe(385), safe(387), safe(263), safe(373), safe(380)].map((kp) => [
-          kp.x,
-          kp.y,
-        ]);
-
-        // EAR
-        const leftEAR = calculateEAR(leftEye);
-        const rightEAR = calculateEAR(rightEye);
-        const avgEAR = (leftEAR + rightEAR) / 2;
-
-        // Blink detection
-        const EAR_THRESHOLD = 0.2;
-        const now = Date.now();
-
-        if (avgEAR < EAR_THRESHOLD && now - lastBlinkTime.current > 300) {
-          blinkCount.current++;
-          lastBlinkTime.current = now;
-        }
-
-        if (now - blinkWindowStart.current > 10000) {
-          blinkWindowStart.current = now;
-          blinkCount.current = 0;
-        }
-
-        const blinkRate =
-          (blinkCount.current / ((now - blinkWindowStart.current) / 1000)) * 60;
-
-        // Gaze & head pose (rough)
-        const noseTip = safe(1);
-        const faceCenter = {
-          x: (safe(234).x + safe(454).x) / 2,
-          y: (safe(10).y + safe(152).y) / 2,
-        };
-
-        const gazeOffsetX = noseTip.x - faceCenter.x;
-        const gazeOffsetY = noseTip.y - faceCenter.y;
-
-        let gazeDirection: LiveAttentionData["gazeDirection"] = "center";
-        if (Math.abs(gazeOffsetX) > 15) gazeDirection = gazeOffsetX > 0 ? "right" : "left";
-        else if (Math.abs(gazeOffsetY) > 15) gazeDirection = gazeOffsetY > 0 ? "down" : "up";
-
-        const headYaw = gazeOffsetX * 0.5;
-        const headPitch = gazeOffsetY * 0.5;
-
-        // Attention score
-        let attentionScore = 100;
-        if (avgEAR < 0.25) attentionScore -= 20;
-        if (gazeDirection !== "center") attentionScore -= 30;
-        if (Math.abs(headYaw) > 20 || Math.abs(headPitch) > 20) attentionScore -= 25;
-        if (blinkRate > 30) attentionScore -= 10;
-        attentionScore = Math.max(0, Math.min(100, attentionScore));
-
-        onDataUpdate({
-          attentionScore,
-          eyeOpenness: avgEAR,
-          blinkRate: Math.round(blinkRate),
-          gazeDirection,
-          headYaw,
-          headPitch,
-          faceDetected: true,
-        });
-      } else {
-        onDataUpdate({
-          attentionScore: 0,
-          eyeOpenness: 0,
-          blinkRate: 0,
-          gazeDirection: "unknown",
-          headYaw: 0,
-          headPitch: 0,
-          faceDetected: false,
-        });
-      }
-    } catch (err) {
-      console.error("[FocusBand] Error detecting face:", err);
-    } finally {
-      animationFrameRef.current = requestAnimationFrame(detectFaces);
+      onDataUpdate({
+        attentionScore,
+        eyeOpenness: avgEAR,
+        blinkRate: Math.round(blinkRate),
+        gazeDirection,
+        headYaw,
+        headPitch,
+        faceDetected: true,
+      });
+    } else {
+      onDataUpdate({
+        attentionScore: 0,
+        eyeOpenness: 0,
+        blinkRate: 0,
+        gazeDirection: "unknown",
+        headYaw: 0,
+        headPitch: 0,
+        faceDetected: false,
+      });
     }
-  };
+  } catch (err) {
+    console.error("[FocusBand] Error detecting face:", err);
+  } finally {
+    animationFrameRef.current = requestAnimationFrame(detectFaces);
+  }
+};
 
   return (
     <div
