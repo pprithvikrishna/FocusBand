@@ -44,10 +44,8 @@ export default function ActiveSession() {
   const timerInterval = useRef<NodeJS.Timeout>();
   const metricsInterval = useRef<NodeJS.Timeout>();
 
-  // 🔵 BLE: state for the watch connection
-  const [bleDevice, setBleDevice] = useState<BluetoothDevice | null>(null);
-  const [bleCharacteristic, setBleCharacteristic] =
-    useState<BluetoothRemoteGATTCharacteristic | null>(null);
+  // For throttling alerts so we don't spam notifications every frame
+  const lastAlertTimeRef = useRef<number>(0);
 
   const saveSessionMutation = useMutation({
     mutationFn: async (sessionData: any) => {
@@ -84,6 +82,15 @@ export default function ActiveSession() {
       });
     },
   });
+
+  // Ask for notification permission once (for alerts to show on phone + watch)
+  useEffect(() => {
+    if ("Notification" in window) {
+      Notification.requestPermission().then((permission) => {
+        console.log("[FocusBand] Notification permission:", permission);
+      });
+    }
+  }, []);
 
   // Keep ref in sync with state
   useEffect(() => {
@@ -361,130 +368,50 @@ export default function ActiveSession() {
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
-  // 🔵 BLE: function to connect to the Fire-Boltt watch
-    async function connectWatch() {
-    try {
-      const nav: any = navigator;
-
-      if (!nav.bluetooth) {
-        alert("This browser does not support Web Bluetooth. Try Chrome on Android.");
-        return;
-      }
-
-      // 1️⃣ Let the user pick ANY Bluetooth device,
-      //    but say we might use these extra services if they exist.
-      const device: BluetoothDevice = await nav.bluetooth.requestDevice({
-        acceptAllDevices: true,
-        optionalServices: [0xAE01, 0xFEEA, 0x190E]
-      });
-
-      console.log("[FocusBand] Selected device:", device.name || device.id);
-      setBleDevice(device);
-
-      // 2️⃣ Connect to GATT server
-      const server = await device.gatt?.connect();
-      if (!server) {
-        alert("Failed to connect to watch.");
-        return;
-      }
-
-      console.log("[FocusBand] Connected to GATT server");
-
-      // 3️⃣ Try to get the AE01 service first
-      let service: BluetoothRemoteGATTService | null = null;
-      try {
-        service = await server.getPrimaryService(0xAE01);
-        console.log("[FocusBand] Using service 0xAE01");
-      } catch (e) {
-        console.warn("[FocusBand] Service 0xAE01 not found, trying 0xFEEA...", e);
-        try {
-          service = await server.getPrimaryService(0xFEEA);
-          console.log("[FocusBand] Using service 0xFEEA");
-        } catch (e2) {
-          console.warn("[FocusBand] Service 0xFEEA not found, trying 0x190E...", e2);
-          try {
-            service = await server.getPrimaryService(0x190E);
-            console.log("[FocusBand] Using service 0x190E");
-          } catch (e3) {
-            console.error("[FocusBand] No known services found on device", e3);
-            alert("Connected to device, but no compatible service (AE01/FEEA/190E) was found.");
-            return;
-          }
-        }
-      }
-
-      if (!service) {
-        alert("No compatible service found on the watch.");
-        return;
-      }
-
-      // 4️⃣ Try to get a writable characteristic
-      let characteristic: BluetoothRemoteGATTCharacteristic | null = null;
-
-      // First try AE01 characteristic (if service UUID is AE01)
-      try {
-        characteristic = await service.getCharacteristic(0xAE01);
-        console.log("[FocusBand] Using characteristic 0xAE01");
-      } catch {
-        // Try the ones you saw as WRITE NO RESPONSE
-        const candidateUUIDs = [0xFEE2, 0xFEE5, 0xFEE6, 0x0004]; // all WRITE NO RESPONSE ones from your scan
-        for (const uuid of candidateUUIDs) {
-          try {
-            characteristic = await service.getCharacteristic(uuid);
-            console.log("[FocusBand] Using characteristic", uuid.toString(16));
-            break;
-          } catch (err) {
-            console.warn("[FocusBand] Characteristic", uuid.toString(16), "not found on this service");
-          }
-        }
-      }
-
-      if (!characteristic) {
-        alert("Could not find a writable characteristic on the watch.");
-        return;
-      }
-
-      setBleCharacteristic(characteristic);
-      alert("Watch connected! (We found a writable characteristic)");
-    } catch (err) {
-      console.error("[FocusBand] Error connecting to watch:", err);
-      alert("Could not connect to watch. Make sure it is NOT already connected in Bluetooth settings, then try again.");
-    }
-  }
-
-
-  // 🔵 BLE: whenever attentionScore changes, send a signal if watch is connected
+  // ⚡ Vibrate phone + send notification when attention is low
   useEffect(() => {
-    if (!bleCharacteristic) return;
+    // Only act during an active, unpaused session
+    if (!isSessionActive || isPaused) return;
 
     const score = liveData.attentionScore ?? 0;
 
-    async function sendAlert() {
-      try {
-        if (score < 50) {
-          // ⚠️ EXPERIMENT ZONE:
-          // Try different byte patterns here and test if the watch vibrates.
-          // Example 1: a simple 1-byte command
-          // const data = new Uint8Array([0x01]);
+    // Only alert if face is actually detected
+    if (!liveData.faceDetected) return;
 
-          // Example 2: the pattern you saw in the scanner (you can change this)
-          const data = new Uint8Array([0xFE, 0xEA, 0x20, 0x07, 0x53, 0x0E, 0xFF]);
+    const now = Date.now();
+    const cooldownMs = 10000; // 10 seconds between alerts
 
-          await bleCharacteristic.writeValueWithoutResponse(data);
-          console.log("[FocusBand] Sent LOW attention alert to watch");
-        } else {
-          // Optional: send a "clear" value when attention is OK
-          const data = new Uint8Array([0x00]);
-          await bleCharacteristic.writeValueWithoutResponse(data);
-          console.log("[FocusBand] Sent NORMAL attention signal to watch");
-        }
-      } catch (err) {
-        console.error("[FocusBand] Error writing to watch:", err);
+    if (score < 50) {
+      // Throttle alerts so we don't spam every frame
+      if (now - lastAlertTimeRef.current < cooldownMs) {
+        return;
       }
-    }
+      lastAlertTimeRef.current = now;
 
-    void sendAlert();
-  }, [liveData.attentionScore, bleCharacteristic]);
+      console.log("[FocusBand] Low attention! Triggering vibration + notification");
+
+      // Phone vibration (Android Chrome)
+      if ("vibrate" in navigator) {
+        navigator.vibrate([300, 150, 300]); // vibrate, pause, vibrate
+      }
+
+      // Notification (watch mirrors this if set to mirror phone alerts)
+      if ("Notification" in window && Notification.permission === "granted") {
+        new Notification("Focus Alert", {
+          body: "Your attention dropped below 50 — time to refocus!",
+          icon: "/icon-192.png", // optional: put an icon in public/
+        });
+      }
+    } else {
+      // Stop any ongoing vibration
+      if ("vibrate" in navigator) navigator.vibrate(0);
+    }
+  }, [
+    liveData.attentionScore,
+    liveData.faceDetected,
+    isSessionActive,
+    isPaused
+  ]);
 
   return (
     <div className="min-h-screen bg-background">
@@ -499,15 +426,6 @@ export default function ActiveSession() {
           </div>
           
           <div className="flex items-center gap-3">
-            {/* 🔵 BLE: Connect Watch button */}
-            <Button
-              variant={bleCharacteristic ? "secondary" : "outline"}
-              size="sm"
-              onClick={connectWatch}
-            >
-              {bleCharacteristic ? "Watch Connected" : "Connect Watch"}
-            </Button>
-
             {isSessionActive && (
               <Badge variant="secondary" className="px-3 py-2 text-base font-medium">
                 {formatDuration(sessionDuration)}
