@@ -4,6 +4,49 @@ import { storage } from "./storage";
 import { insertSessionSchema, insertAttentionMetricSchema } from "@shared/schema";
 
 export async function registerRoutes(app: Express): Promise<Server> {
+  // SMS alert endpoint using Fast2SMS
+  app.post("/api/send-alert-sms", async (req, res) => {
+    try {
+      const apiKey = process.env.FAST2SMS_API_KEY;
+      const mobile = process.env.ALERT_MOBILE;
+
+      if (!apiKey || !mobile) {
+        console.error("[SMS] FAST2SMS_API_KEY or ALERT_MOBILE not set");
+        return res
+          .status(500)
+          .json({ ok: false, error: "SMS env vars missing on server" });
+      }
+
+      const url = "https://www.fast2sms.com/dev/bulkV2";
+
+      const params = new URLSearchParams({
+        authorization: apiKey,
+        route: "q",
+        language: "english",
+        numbers: mobile,
+        message:
+          "FocusBand alert: Attention dropped below 50. Please refocus now.",
+      });
+
+      const response = await fetch(`${url}?${params.toString()}`, {
+        method: "GET",
+      });
+
+      const data = await response.json().catch(() => ({} as any));
+
+      if (!response.ok || (data && data.return === false)) {
+        console.error("[SMS] Fast2SMS error:", data);
+        return res.status(500).json({ ok: false, error: "Fast2SMS API error" });
+      }
+
+      console.log("[SMS] Fast2SMS success:", data);
+      return res.json({ ok: true });
+    } catch (err) {
+      console.error("[SMS] Error in /api/send-alert-sms:", err);
+      return res.status(500).json({ ok: false, error: "Server error" });
+    }
+  });
+
   // Session endpoints
   
   // Create a new session
@@ -29,10 +72,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Get a specific session
+  // Get a single session by ID
   app.get("/api/sessions/:id", async (req, res) => {
     try {
-      const session = await storage.getSession(req.params.id);
+      const session = await storage.getSessionById(req.params.id);
       if (!session) {
         return res.status(404).json({ error: "Session not found" });
       }
@@ -43,27 +86,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Update a session
+  // Update a session by ID
   app.patch("/api/sessions/:id", async (req, res) => {
     try {
-      const session = await storage.updateSession(req.params.id, req.body);
-      if (!session) {
+      const updatedSession = await storage.updateSession(req.params.id, req.body);
+      if (!updatedSession) {
         return res.status(404).json({ error: "Session not found" });
       }
-      res.json(session);
+      res.json(updatedSession);
     } catch (error) {
       console.error("Error updating session:", error);
       res.status(500).json({ error: "Failed to update session" });
     }
   });
 
-  // Delete a session
+  // Delete a session by ID
   app.delete("/api/sessions/:id", async (req, res) => {
     try {
-      const success = await storage.deleteSession(req.params.id);
-      if (!success) {
-        return res.status(404).json({ error: "Session not found" });
-      }
+      await storage.deleteSession(req.params.id);
       res.json({ success: true });
     } catch (error) {
       console.error("Error deleting session:", error);
@@ -101,53 +141,66 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Analytics endpoints
+  // Stats endpoints
   
-  // Get session statistics
+  // Get attention statistics
   app.get("/api/stats", async (_req, res) => {
     try {
-      const stats = await storage.getSessionStats();
+      const stats = await storage.getStats();
       res.json(stats);
     } catch (error) {
       console.error("Error fetching stats:", error);
-      res.status(500).json({ error: "Failed to fetch statistics" });
+      res.status(500).json({ error: "Failed to fetch stats" });
     }
   });
 
-  // Export endpoints
-  
-  // Export all sessions as CSV
+  // Export all sessions and metrics as CSV
   app.get("/api/export/csv", async (_req, res) => {
     try {
       const sessions = await storage.getAllSessions();
-      
-      // Create CSV header
       const headers = [
         "Session ID",
         "Start Time",
         "End Time",
-        "Duration (seconds)",
+        "Duration (s)",
         "Average Attention",
         "Peak Attention",
         "Lowest Attention",
         "Total Blinks",
-        "Average Eye Openness"
+        "Average Eye Openness",
       ];
+
+      const rows: string[][] = [];
       
-      // Create CSV rows
-      const rows = sessions.map(session => [
-        session.id,
-        session.startTime.toISOString(),
-        session.endTime?.toISOString() || "",
-        session.duration?.toString() || "",
-        session.averageAttention?.toString() || "",
-        session.peakAttention?.toString() || "",
-        session.lowestAttention?.toString() || "",
-        session.totalBlinks?.toString() || "",
-        session.averageEyeOpenness?.toString() || ""
-      ]);
-      
-      // Combine header and rows
+      for (const session of sessions) {
+        const metrics = await storage.getMetricsBySessionId(session.id);
+        const averageAttention = metrics.length > 0
+          ? metrics.reduce((sum, metric) => sum + metric.attentionScore, 0) / metrics.length
+          : 0;
+        const peakAttention = metrics.length > 0
+          ? Math.max(...metrics.map(metric => metric.attentionScore))
+          : 0;
+        const lowestAttention = metrics.length > 0
+          ? Math.min(...metrics.map(metric => metric.attentionScore))
+          : 0;
+        const totalBlinks = metrics.reduce((sum, metric) => sum + (metric.blinkDetected ? 1 : 0), 0);
+        const averageEyeOpenness = metrics.length > 0
+          ? metrics.reduce((sum, metric) => sum + metric.eyeOpenness, 0) / metrics.length
+          : 0;
+
+        rows.push([
+          session.id,
+          session.startTime.toISOString(),
+          session.endTime ? session.endTime.toISOString() : "",
+          session.duration?.toString() ?? "",
+          averageAttention.toFixed(2),
+          peakAttention.toString(),
+          lowestAttention.toString(),
+          totalBlinks.toString(),
+          averageEyeOpenness.toFixed(4),
+        ]);
+      }
+
       const csv = [headers, ...rows]
         .map(row => row.map(cell => `"${cell}"`).join(","))
         .join("\n");
