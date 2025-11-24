@@ -18,9 +18,9 @@ export default function ActiveSession() {
   const [isSessionActive, setIsSessionActive] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [sessionDuration, setSessionDuration] = useState(0);
-  const [cameraPermission, setCameraPermission] = useState<"pending" | "granted" | "denied">(
-    "pending",
-  );
+  const [cameraPermission, setCameraPermission] = useState<
+    "pending" | "granted" | "denied"
+  >("pending");
 
   const [liveData, setLiveData] = useState<LiveAttentionData>({
     attentionScore: 0,
@@ -32,7 +32,9 @@ export default function ActiveSession() {
     faceDetected: false,
   });
 
-  const [graphData, setGraphData] = useState<Array<{ time: number; score: number }>>([]);
+  const [graphData, setGraphData] = useState<Array<{ time: number; score: number }>>(
+    [],
+  );
   const [allScores, setAllScores] = useState<number[]>([]);
   const [blinkCounter, setBlinkCounter] = useState(0);
   const [eyeOpennessSum, setEyeOpennessSum] = useState(0);
@@ -46,8 +48,10 @@ export default function ActiveSession() {
   const timerInterval = useRef<NodeJS.Timeout>();
   const metricsInterval = useRef<NodeJS.Timeout>();
 
-  // For throttling alerts so we don't spam notifications every frame
+  // For throttling vibration/notification alerts
   const lastAlertTimeRef = useRef<number>(0);
+  // To ensure we send ONE SMS each time score crosses from >=50 to <50
+  const lastBelowThresholdRef = useRef<boolean>(false);
 
   const saveSessionMutation = useMutation({
     mutationFn: async (sessionData: any) => {
@@ -85,7 +89,7 @@ export default function ActiveSession() {
     },
   });
 
-  // Ask for notification permission once (for alerts to show on phone + watch)
+  // Ask for notification permission once (for alerts on phone)
   useEffect(() => {
     if ("Notification" in window) {
       Notification.requestPermission().then((permission) => {
@@ -105,9 +109,7 @@ export default function ActiveSession() {
         setSessionDuration(Math.floor((Date.now() - sessionStartTime.current) / 1000));
       }, 1000);
 
-      // Save metrics every 10 seconds (stable interval - no dependencies to avoid resets)
       metricsInterval.current = setInterval(async () => {
-        // Guard against overlapping mutations using ref
         if (isSavingMetricsRef.current) {
           console.log("Skipping batch save - previous save still in progress");
           return;
@@ -120,7 +122,6 @@ export default function ActiveSession() {
           isSavingMetricsRef.current = true;
           try {
             await saveMetricsMutation.mutateAsync(metricsToSave);
-            // Only remove exactly the metrics that were just saved (first saveCount items)
             setPendingMetrics((current) => {
               if (current.length >= saveCount) {
                 return current.slice(saveCount);
@@ -160,7 +161,6 @@ export default function ActiveSession() {
       setCameraPermission("granted");
       sessionStartTime.current = Date.now();
 
-      // Create session immediately to get session ID
       const sessionData = {
         startTime: new Date(Date.now()).toISOString(),
         endTime: null,
@@ -184,6 +184,7 @@ export default function ActiveSession() {
       setEyeOpennessSum(0);
       setDataPointCount(0);
       setPendingMetrics([]);
+      lastBelowThresholdRef.current = false; // reset SMS trigger state
     } catch (error) {
       setCameraPermission("denied");
       console.error("Error starting session:", error);
@@ -304,6 +305,7 @@ export default function ActiveSession() {
     setDataPointCount(0);
     setPendingMetrics([]);
     currentSessionId.current = "";
+    lastBelowThresholdRef.current = false;
   };
 
   const updateAttentionData = (data: LiveAttentionData) => {
@@ -350,7 +352,7 @@ export default function ActiveSession() {
     return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
   };
 
-  // Test button to manually trigger phone + watch alert
+  // Test button to manually trigger phone + (maybe) watch alert
   const sendTestAlert = () => {
     if ("vibrate" in navigator) {
       try {
@@ -374,43 +376,58 @@ export default function ActiveSession() {
     }
   };
 
-  // ⚡ Vibrate phone + send notification when attention is low
+  // ⚡ Vibrate phone + send notification + SMS when attention is low
   useEffect(() => {
     if (!isSessionActive || isPaused) return;
 
     const score = liveData.attentionScore ?? 0;
-    if (!liveData.faceDetected) return;
+    const faceDetected = liveData.faceDetected;
+
+    if (!faceDetected) {
+      // Reset SMS trigger when face is gone
+      lastBelowThresholdRef.current = false;
+      return;
+    }
 
     const now = Date.now();
-    const cooldownMs = 10000;
+    const threshold = 50;
 
-    if (score < 50) {
-      if (now - lastAlertTimeRef.current < cooldownMs) {
-        return;
-      }
-      lastAlertTimeRef.current = now;
+    if (score < threshold) {
+      // ----- Vibration + Notification (with 10s cooldown) -----
+      if (now - lastAlertTimeRef.current >= 10000) {
+        lastAlertTimeRef.current = now;
 
-      console.log("[FocusBand] Low attention! Triggering vibration + notification");
+        console.log("[FocusBand] Low attention! Triggering vibration + notification");
 
-      if ("vibrate" in navigator) {
-        try {
-          navigator.vibrate([300, 150, 300]);
-        } catch (err) {
-          console.error("Vibration error:", err);
+        if ("vibrate" in navigator) {
+          try {
+            navigator.vibrate([300, 150, 300]);
+          } catch (err) {
+            console.error("Vibration error:", err);
+          }
+        }
+
+        if ("Notification" in window && Notification.permission === "granted") {
+          try {
+            new Notification("Focus Alert", {
+              body: "Your attention dropped below 50 — time to refocus!",
+              icon: "/icon-192.png",
+            });
+          } catch (err) {
+            console.error("Notification error:", err);
+          }
         }
       }
 
-      if ("Notification" in window && Notification.permission === "granted") {
-        try {
-          new Notification("Focus Alert", {
-            body: "Your attention dropped below 50 — time to refocus!",
-            icon: "/icon-192.png",
-          });
-        } catch (err) {
-          console.error("Notification error:", err);
-        }
+      // ----- SMS: send ONE time for each drop from >=50 to <50 -----
+      if (!lastBelowThresholdRef.current) {
+        lastBelowThresholdRef.current = true;
+        fetch("/api/send-alert-sms", { method: "POST" }).catch((err) => {
+          console.error("Failed to send SMS alert:", err);
+        });
       }
     } else {
+      // Score back to normal: stop vibration & allow next SMS on next drop
       if ("vibrate" in navigator) {
         try {
           navigator.vibrate(0);
@@ -418,6 +435,7 @@ export default function ActiveSession() {
           console.error("Stop vibration error:", err);
         }
       }
+      lastBelowThresholdRef.current = false;
     }
   }, [liveData.attentionScore, liveData.faceDetected, isSessionActive, isPaused]);
 
@@ -453,7 +471,9 @@ export default function ActiveSession() {
             <Card className="p-6">
               <div className="space-y-4">
                 <div className="flex items-center justify-between">
-                  <h2 className="text-xl font-semibold text-card-foreground">Camera Feed</h2>
+                  <h2 className="text-xl font-semibold text-card-foreground">
+                    Camera Feed
+                  </h2>
                   {liveData.faceDetected ? (
                     <Badge className="bg-green-500/10 text-green-700 dark:text-green-400 border-green-500/20">
                       <div className="w-2 h-2 bg-green-500 rounded-full mr-2 animate-pulse" />
@@ -526,7 +546,8 @@ export default function ActiveSession() {
                 {cameraPermission === "denied" && (
                   <div className="bg-destructive/10 border border-destructive/20 rounded-lg p-4">
                     <p className="text-sm text-destructive-foreground text-center">
-                      Camera permission denied. Please enable camera access to use this feature.
+                      Camera permission denied. Please enable camera access to use this
+                      feature.
                     </p>
                   </div>
                 )}
