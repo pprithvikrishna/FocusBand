@@ -367,6 +367,31 @@ export default function ActiveSession() {
     const secs = seconds % 60;
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
+    // Test button to manually trigger phone + watch alert
+  const sendTestAlert = () => {
+    // Vibrate phone
+    if ("vibrate" in navigator) {
+      try {
+        navigator.vibrate([300, 150, 300]);
+      } catch (err) {
+        console.error("Vibration error:", err);
+      }
+    }
+
+    // Show notification (watch may mirror this)
+    if ("Notification" in window && Notification.permission === "granted") {
+      try {
+        new Notification("FocusBand Test Alert", {
+          body: "This is a test alert from FocusBand.",
+          icon: "/icon-192.png", // optional
+        });
+      } catch (err) {
+        console.error("Notification error:", err);
+      }
+    } else {
+      console.log("Notification not allowed or not supported");
+    }
+  };
 
   // ⚡ Vibrate phone + send notification when attention is low
   useEffect(() => {
@@ -392,19 +417,33 @@ export default function ActiveSession() {
 
       // Phone vibration (Android Chrome)
       if ("vibrate" in navigator) {
-        navigator.vibrate([300, 150, 300]); // vibrate, pause, vibrate
+        try {
+          navigator.vibrate([300, 150, 300]); // vibrate, pause, vibrate
+        } catch (err) {
+          console.error("Vibration error:", err);
+        }
       }
 
-      // Notification (watch mirrors this if set to mirror phone alerts)
+      // Notification (watch mirrors this if it supports 'Others')
       if ("Notification" in window && Notification.permission === "granted") {
-        new Notification("Focus Alert", {
-          body: "Your attention dropped below 50 — time to refocus!",
-          icon: "/icon-192.png", // optional: put an icon in public/
-        });
+        try {
+          new Notification("Focus Alert", {
+            body: "Your attention dropped below 50 — time to refocus!",
+            icon: "/icon-192.png", // optional
+          });
+        } catch (err) {
+          console.error("Notification error:", err);
+        }
       }
     } else {
       // Stop any ongoing vibration
-      if ("vibrate" in navigator) navigator.vibrate(0);
+      if ("vibrate" in navigator) {
+        try {
+          navigator.vibrate(0);
+        } catch (err) {
+          console.error("Stop vibration error:", err);
+        }
+      }
     }
   }, [
     liveData.attentionScore,
@@ -412,6 +451,7 @@ export default function ActiveSession() {
     isSessionActive,
     isPaused
   ]);
+
 
   return (
     <div className="min-h-screen bg-background">
@@ -426,13 +466,21 @@ export default function ActiveSession() {
           </div>
           
           <div className="flex items-center gap-3">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={sendTestAlert}
+            >
+              Test Phone + Watch Alert
+            </Button>
+          
             {isSessionActive && (
               <Badge variant="secondary" className="px-3 py-2 text-base font-medium">
                 {formatDuration(sessionDuration)}
               </Badge>
             )}
           </div>
-        </div>
+
 
         {/* Main Content */}
         <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
