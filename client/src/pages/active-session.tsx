@@ -18,8 +18,10 @@ export default function ActiveSession() {
   const [isSessionActive, setIsSessionActive] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [sessionDuration, setSessionDuration] = useState(0);
-  const [cameraPermission, setCameraPermission] = useState<"pending" | "granted" | "denied">("pending");
-  
+  const [cameraPermission, setCameraPermission] = useState<"pending" | "granted" | "denied">(
+    "pending",
+  );
+
   const [liveData, setLiveData] = useState<LiveAttentionData>({
     attentionScore: 0,
     eyeOpenness: 0,
@@ -110,17 +112,16 @@ export default function ActiveSession() {
           console.log("Skipping batch save - previous save still in progress");
           return;
         }
-        
+
         if (pendingMetricsRef.current.length > 0 && currentSessionId.current) {
           const metricsToSave = [...pendingMetricsRef.current];
           const saveCount = metricsToSave.length;
-          
+
           isSavingMetricsRef.current = true;
           try {
             await saveMetricsMutation.mutateAsync(metricsToSave);
             // Only remove exactly the metrics that were just saved (first saveCount items)
-            setPendingMetrics(current => {
-              // Remove only if current queue still starts with the same metrics we saved
+            setPendingMetrics((current) => {
               if (current.length >= saveCount) {
                 return current.slice(saveCount);
               }
@@ -128,7 +129,6 @@ export default function ActiveSession() {
             });
           } catch (error) {
             console.error("Error saving metrics batch:", error);
-            // Keep all metrics in queue for retry on next interval
           } finally {
             isSavingMetricsRef.current = false;
           }
@@ -156,10 +156,10 @@ export default function ActiveSession() {
   const handleStartSession = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-      stream.getTracks().forEach(track => track.stop());
+      stream.getTracks().forEach((track) => track.stop());
       setCameraPermission("granted");
       sessionStartTime.current = Date.now();
-      
+
       // Create session immediately to get session ID
       const sessionData = {
         startTime: new Date(Date.now()).toISOString(),
@@ -171,10 +171,10 @@ export default function ActiveSession() {
         totalBlinks: null,
         averageEyeOpenness: null,
       };
-      
+
       const session = await saveSessionMutation.mutateAsync(sessionData);
       currentSessionId.current = session.id;
-      
+
       setIsSessionActive(true);
       setIsPaused(false);
       setSessionDuration(0);
@@ -203,24 +203,20 @@ export default function ActiveSession() {
   };
 
   const handleStopSession = async () => {
-    // STEP 1: Set stopping flag immediately to freeze new data capture
     isStoppingRef.current = true;
-    
-    // STEP 2: Stop session to trigger cleanup of intervals and camera
+
     setIsSessionActive(false);
     setIsPaused(false);
-    
-    // Wait a brief moment for intervals to clear
-    await new Promise(resolve => setTimeout(resolve, 100));
-    
-    // STEP 3: Wait for any in-flight batch save to complete
-    const maxWaitIterations = 50; // 5 seconds max
+
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    const maxWaitIterations = 50;
     let waitIterations = 0;
     while (isSavingMetricsRef.current && waitIterations < maxWaitIterations) {
-      await new Promise(resolve => setTimeout(resolve, 100));
+      await new Promise((resolve) => setTimeout(resolve, 100));
       waitIterations++;
     }
-    
+
     if (waitIterations >= maxWaitIterations) {
       console.warn("Timed out waiting for in-flight batch save");
       toast({
@@ -229,18 +225,14 @@ export default function ActiveSession() {
         variant: "destructive",
       });
     }
-    
-    // STEP 4: Save final batch of metrics (single attempt - user can retry if it fails)
-    // Wait for any pending state updates to settle
-    await new Promise(resolve => setTimeout(resolve, 100));
-    
-    // Capture final metrics snapshot
+
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
     const finalMetrics = [...pendingMetrics];
-    
+
     if (finalMetrics.length > 0 && currentSessionId.current) {
       try {
         await saveMetricsMutation.mutateAsync(finalMetrics);
-        // Success - clear the metrics
         setPendingMetrics([]);
       } catch (error) {
         console.error("Error saving final metrics:", error);
@@ -250,22 +242,20 @@ export default function ActiveSession() {
           variant: "destructive",
           duration: 10000,
         });
-        // Reset stopping flag and re-enable session for retry
         isStoppingRef.current = false;
         setIsSessionActive(true);
-        return; // Early return - don't proceed to session update or state reset
+        return;
       }
     }
 
-    // STEP 5: Update session with final statistics
     if (sessionDuration > 0 && allScores.length > 0 && currentSessionId.current) {
-      // Calculate session statistics
-      const averageAttention = allScores.reduce((sum, score) => sum + score, 0) / allScores.length;
+      const averageAttention =
+        allScores.reduce((sum, score) => sum + score, 0) / allScores.length;
       const peakAttention = Math.max(...allScores);
       const lowestAttention = Math.min(...allScores);
-      const averageEyeOpenness = dataPointCount > 0 ? eyeOpennessSum / dataPointCount : 0;
+      const averageEyeOpenness =
+        dataPointCount > 0 ? eyeOpennessSum / dataPointCount : 0;
 
-      // Update session with final statistics
       const sessionUpdate = {
         endTime: new Date().toISOString(),
         duration: sessionDuration,
@@ -278,19 +268,19 @@ export default function ActiveSession() {
 
       try {
         const response = await fetch(`/api/sessions/${currentSessionId.current}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify(sessionUpdate),
         });
-        
+
         if (!response.ok) {
           const errorText = await response.text();
           throw new Error(`Session update failed: ${response.status} ${errorText}`);
         }
-        
+
         queryClient.invalidateQueries({ queryKey: ["/api/sessions"] });
         queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-        
+
         toast({
           title: "Session Complete",
           description: "Your session has been saved successfully.",
@@ -305,7 +295,6 @@ export default function ActiveSession() {
       }
     }
 
-    // STEP 6: Reset all remaining state (only after all saves succeeded)
     isStoppingRef.current = false;
     setSessionDuration(0);
     setGraphData([]);
@@ -319,32 +308,25 @@ export default function ActiveSession() {
 
   const updateAttentionData = (data: LiveAttentionData) => {
     setLiveData(data);
-    
-    // Don't accept new metrics if session is stopping
+
     if (isStoppingRef.current) {
       return;
     }
-    
+
     if (isSessionActive && !isPaused && data.faceDetected && currentSessionId.current) {
-      // Update graph data (keep last 60 seconds)
-      setGraphData(prev => {
+      setGraphData((prev) => {
         const newData = [...prev, { time: sessionDuration, score: data.attentionScore }];
         return newData.slice(-60);
       });
 
-      // Track all scores for statistics
-      setAllScores(prev => [...prev, data.attentionScore]);
-      
-      // Track eye openness sum
-      setEyeOpennessSum(prev => prev + data.eyeOpenness);
-      setDataPointCount(prev => prev + 1);
+      setAllScores((prev) => [...prev, data.attentionScore]);
+      setEyeOpennessSum((prev) => prev + data.eyeOpenness);
+      setDataPointCount((prev) => prev + 1);
 
-      // Track blinks (simple detection based on low eye openness)
       if (data.eyeOpenness < 0.15) {
-        setBlinkCounter(prev => prev + 1);
+        setBlinkCounter((prev) => prev + 1);
       }
 
-      // Queue metric for batch save (only if we have a valid session ID)
       if (currentSessionId.current) {
         const metric = {
           sessionId: currentSessionId.current,
@@ -356,8 +338,8 @@ export default function ActiveSession() {
           headYaw: data.headYaw,
           headPitch: data.headPitch,
         };
-        
-        setPendingMetrics(prev => [...prev, metric]);
+
+        setPendingMetrics((prev) => [...prev, metric]);
       }
     }
   };
@@ -365,11 +347,11 @@ export default function ActiveSession() {
   const formatDuration = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
-    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
   };
-    // Test button to manually trigger phone + watch alert
+
+  // Test button to manually trigger phone + watch alert
   const sendTestAlert = () => {
-    // Vibrate phone
     if ("vibrate" in navigator) {
       try {
         navigator.vibrate([300, 150, 300]);
@@ -378,12 +360,11 @@ export default function ActiveSession() {
       }
     }
 
-    // Show notification (watch may mirror this)
     if ("Notification" in window && Notification.permission === "granted") {
       try {
         new Notification("FocusBand Test Alert", {
           body: "This is a test alert from FocusBand.",
-          icon: "/icon-192.png", // optional
+          icon: "/icon-192.png",
         });
       } catch (err) {
         console.error("Notification error:", err);
@@ -395,19 +376,15 @@ export default function ActiveSession() {
 
   // ⚡ Vibrate phone + send notification when attention is low
   useEffect(() => {
-    // Only act during an active, unpaused session
     if (!isSessionActive || isPaused) return;
 
     const score = liveData.attentionScore ?? 0;
-
-    // Only alert if face is actually detected
     if (!liveData.faceDetected) return;
 
     const now = Date.now();
-    const cooldownMs = 10000; // 10 seconds between alerts
+    const cooldownMs = 10000;
 
     if (score < 50) {
-      // Throttle alerts so we don't spam every frame
       if (now - lastAlertTimeRef.current < cooldownMs) {
         return;
       }
@@ -415,28 +392,25 @@ export default function ActiveSession() {
 
       console.log("[FocusBand] Low attention! Triggering vibration + notification");
 
-      // Phone vibration (Android Chrome)
       if ("vibrate" in navigator) {
         try {
-          navigator.vibrate([300, 150, 300]); // vibrate, pause, vibrate
+          navigator.vibrate([300, 150, 300]);
         } catch (err) {
           console.error("Vibration error:", err);
         }
       }
 
-      // Notification (watch mirrors this if it supports 'Others')
       if ("Notification" in window && Notification.permission === "granted") {
         try {
           new Notification("Focus Alert", {
             body: "Your attention dropped below 50 — time to refocus!",
-            icon: "/icon-192.png", // optional
+            icon: "/icon-192.png",
           });
         } catch (err) {
           console.error("Notification error:", err);
         }
       }
     } else {
-      // Stop any ongoing vibration
       if ("vibrate" in navigator) {
         try {
           navigator.vibrate(0);
@@ -445,13 +419,7 @@ export default function ActiveSession() {
         }
       }
     }
-  }, [
-    liveData.attentionScore,
-    liveData.faceDetected,
-    isSessionActive,
-    isPaused
-  ]);
-
+  }, [liveData.attentionScore, liveData.faceDetected, isSessionActive, isPaused]);
 
   return (
     <div className="min-h-screen bg-background">
@@ -464,23 +432,19 @@ export default function ActiveSession() {
               Monitor your attention in real-time
             </p>
           </div>
-          
+
           <div className="flex items-center gap-3">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={sendTestAlert}
-            >
+            <Button variant="outline" size="sm" onClick={sendTestAlert}>
               Test Phone + Watch Alert
             </Button>
-          
+
             {isSessionActive && (
               <Badge variant="secondary" className="px-3 py-2 text-base font-medium">
                 {formatDuration(sessionDuration)}
               </Badge>
             )}
           </div>
-
+        </div>
 
         {/* Main Content */}
         <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
@@ -491,12 +455,12 @@ export default function ActiveSession() {
                 <div className="flex items-center justify-between">
                   <h2 className="text-xl font-semibold text-card-foreground">Camera Feed</h2>
                   {liveData.faceDetected ? (
-                    <Badge variant="secondary" className="bg-green-500/10 text-green-700 dark:text-green-400 border-green-500/20">
+                    <Badge className="bg-green-500/10 text-green-700 dark:text-green-400 border-green-500/20">
                       <div className="w-2 h-2 bg-green-500 rounded-full mr-2 animate-pulse" />
                       Face Detected
                     </Badge>
                   ) : isSessionActive ? (
-                    <Badge variant="secondary" className="bg-yellow-500/10 text-yellow-700 dark:text-yellow-400 border-yellow-500/20">
+                    <Badge className="bg-yellow-500/10 text-yellow-700 dark:text-yellow-400 border-yellow-500/20">
                       <VideoOff className="w-3 h-3 mr-1" />
                       No Face
                     </Badge>
@@ -580,13 +544,11 @@ export default function ActiveSession() {
 
           {/* Right Column - Metrics (40%) */}
           <div className="lg:col-span-2 space-y-6">
-            {/* Attention Score */}
             <AttentionScoreDisplay
               score={liveData.attentionScore}
               isActive={isSessionActive && !isPaused && liveData.faceDetected}
             />
 
-            {/* Individual Metrics */}
             <MetricsGrid
               eyeOpenness={liveData.eyeOpenness}
               blinkRate={liveData.blinkRate}
@@ -595,7 +557,6 @@ export default function ActiveSession() {
               headPitch={liveData.headPitch}
             />
 
-            {/* Session Info */}
             {isSessionActive && (
               <Card className="p-6">
                 <h3 className="text-lg font-semibold text-card-foreground mb-3">
