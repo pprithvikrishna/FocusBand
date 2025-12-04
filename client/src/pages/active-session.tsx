@@ -161,6 +161,15 @@ export default function ActiveSession() {
 
   const handleStartSession = async () => {
     try {
+      if (!studentName || !studentGrade || !parentName || !parentEmail) {
+        toast({
+          title: "Missing information",
+          description: "Please fill in student and parent details before starting.",
+          variant: "destructive",
+        });
+        return;
+      }
+
       const stream = await navigator.mediaDevices.getUserMedia({ video: true });
       stream.getTracks().forEach((track) => track.stop());
       setCameraPermission("granted");
