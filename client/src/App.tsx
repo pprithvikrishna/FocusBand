@@ -15,6 +15,7 @@ function Router() {
     <Switch>
       <Route path="/" component={ActiveSession} />
       <Route path="/dashboard" component={Dashboard} />
+      <Route path="/parent-dashboard" component={ParentDashboard} />
       <Route component={ActiveSession} />
     </Switch>
   );
@@ -51,6 +52,12 @@ function App() {
                       Dashboard
                     </Button>
                   </Link>
+                  <Link href="/parent-dashboard">
+                    <Button variant="ghost" size="sm">
+                      Parent Dashboard
+                    </Button>
+                  </Link>
+
                 </nav>
               </div>
 
