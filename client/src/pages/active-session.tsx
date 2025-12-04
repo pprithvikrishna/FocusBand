@@ -15,6 +15,11 @@ import { useToast } from "@/hooks/use-toast";
 export default function ActiveSession() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  // Student & Parent Info for multi-student tracking
+  const [studentName, setStudentName] = useState("");
+  const [studentGrade, setStudentGrade] = useState("");
+  const [parentName, setParentName] = useState("");
+  const [parentEmail, setParentEmail] = useState("");
   const [isSessionActive, setIsSessionActive] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [sessionDuration, setSessionDuration] = useState(0);
