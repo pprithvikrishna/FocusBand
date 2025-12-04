@@ -321,6 +321,19 @@ export default function ActiveSession() {
 
         queryClient.invalidateQueries({ queryKey: ["/api/sessions"] });
         queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+        // After successfully updating session on backend, also store a summary locally
+        saveSessionToLocalDashboard({
+          studentName,
+          studentGrade,
+          parentName,
+          parentEmail,
+          startTime: new Date(Date.now() - sessionDuration * 1000).toISOString(),
+          endTime: new Date().toISOString(),
+          duration: sessionDuration,
+          averageAttention,
+          peakAttention,
+          lowestAttention,
+        });
 
         toast({
           title: "Session Complete",
