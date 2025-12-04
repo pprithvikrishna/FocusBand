@@ -455,19 +455,61 @@ export default function ActiveSession() {
               Monitor your attention in real-time
             </p>
           </div>
-
-          <div className="flex items-center gap-3">
-            <Button variant="outline" size="sm" onClick={sendTestAlert}>
-              Test Phone + Watch Alert
-            </Button>
-
-            {isSessionActive && (
-              <Badge variant="secondary" className="px-3 py-2 text-base font-medium">
-                {formatDuration(sessionDuration)}
-              </Badge>
-            )}
+          
+          <div className="flex flex-col gap-2 items-stretch sm:items-end">
+            {/* Student + Parent Info */}
+            <div className="flex flex-col sm:flex-row gap-2">
+              <input
+                className="border rounded px-2 py-1 text-sm"
+                placeholder="Student name"
+                value={studentName}
+                onChange={(e) => setStudentName(e.target.value)}
+                disabled={isSessionActive}
+              />
+              <input
+                className="border rounded px-2 py-1 text-sm"
+                placeholder="Grade (e.g. 7)"
+                value={studentGrade}
+                onChange={(e) => setStudentGrade(e.target.value)}
+                disabled={isSessionActive}
+              />
+            </div>
+            <div className="flex flex-col sm:flex-row gap-2">
+              <input
+                className="border rounded px-2 py-1 text-sm"
+                placeholder="Parent name"
+                value={parentName}
+                onChange={(e) => setParentName(e.target.value)}
+                disabled={isSessionActive}
+              />
+              <input
+                className="border rounded px-2 py-1 text-sm"
+                placeholder="Parent email"
+                value={parentEmail}
+                onChange={(e) => setParentEmail(e.target.value)}
+                disabled={isSessionActive}
+              />
+            </div>
+        
+            {/* Test alert + timer */}
+            <div className="flex items-center gap-3 justify-end">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={sendTestAlert}
+              >
+                Test Phone + Watch Alert
+              </Button>
+        
+              {isSessionActive && (
+                <Badge variant="secondary" className="px-3 py-2 text-base font-medium">
+                  {formatDuration(sessionDuration)}
+                </Badge>
+              )}
+            </div>
           </div>
         </div>
+
 
         {/* Main Content */}
         <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
