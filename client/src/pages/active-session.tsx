@@ -210,32 +210,6 @@ export default function ActiveSession() {
     }
   };
 
-  // Save a summary of the finished session into localStorage for the Parent Dashboard
-  const saveSessionToLocalDashboard = (summary: {
-    studentName: string;
-    studentGrade: string;
-    parentName: string;
-    parentEmail: string;
-    startTime: string;
-    endTime: string;
-    duration: number;
-    averageAttention: number;
-    peakAttention: number;
-    lowestAttention: number;
-  }) => {
-    try {
-      const key = "focusband_parent_dashboard_v1";
-      const existingRaw = window.localStorage.getItem(key);
-      const existing = existingRaw ? JSON.parse(existingRaw) : [];
-  
-      const updated = [...existing, summary];
-      window.localStorage.setItem(key, JSON.stringify(updated));
-      console.log("[FocusBand] Saved session to parent dashboard store");
-    } catch (err) {
-      console.error("Error saving to local dashboard:", err);
-    }
-  };
-
   const handlePauseResume = () => {
     if (isPaused) {
       sessionStartTime.current = Date.now() - sessionDuration * 1000;
