@@ -491,7 +491,30 @@ export default function ActiveSession() {
       lastBelowThresholdRef.current = false;
     }
   }, [liveData.attentionScore, liveData.faceDetected, isSessionActive, isPaused]);
-// Save a summary of the finished session into localStorage for the Parent Dashboard
+
+// 🔹 Save a simple summary of the session for the Parent Dashboard
+const saveSessionToLocalDashboard = (summary: {
+  studentName: string;
+  studentGrade: string;
+  parentName: string;
+  parentEmail: string;
+  duration: number;
+  averageAttention: number;
+  endedAt: string;
+}) => {
+  try {
+    const key = "focusband_parent_dashboard_v1";
+    const existingRaw = window.localStorage.getItem(key);
+    const existing = existingRaw ? JSON.parse(existingRaw) : [];
+
+    const updated = [...existing, summary];
+    window.localStorage.setItem(key, JSON.stringify(updated));
+
+    console.log("[FocusBand] Saved session summary:", summary);
+  } catch (err) {
+    console.error("Error saving to parent dashboard:", err);
+  }
+};
 
   return (
     <div className="min-h-screen bg-background">
