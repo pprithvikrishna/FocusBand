@@ -318,6 +318,16 @@ export default function ActiveSession() {
           const errorText = await response.text();
           throw new Error(`Session update failed: ${response.status} ${errorText}`);
         }
+         // ✅ Also save a simple summary locally for Parent Dashboard
+saveSessionToLocalDashboard({
+  studentName,
+  studentGrade,
+  parentName,
+  parentEmail,
+  duration: sessionDuration,
+  averageAttention,
+  endedAt: new Date().toISOString(),
+});
 
         queryClient.invalidateQueries({ queryKey: ["/api/sessions"] });
         queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
