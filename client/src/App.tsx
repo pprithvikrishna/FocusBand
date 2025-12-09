@@ -8,7 +8,7 @@ import Dashboard from "@/pages/dashboard";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Brain, LayoutDashboard, Activity } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import ParentDashboard from "@/pages/parent-dashboard";
+// import ParentDashboard from "@/pages/parent-dashboard";
 
 function Router() {
   return (
