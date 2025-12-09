@@ -32,6 +32,9 @@ export default function ActiveSession() {
     faceDetected: false,
   });
 
+  // NEW: parent email state
+  const [parentEmail, setParentEmail] = useState("");
+
   const [allScores, setAllScores] = useState<number[]>([]);
   const [blinkCounter, setBlinkCounter] = useState(0);
   const [eyeOpennessSum, setEyeOpennessSum] = useState(0);
@@ -46,10 +49,14 @@ export default function ActiveSession() {
   const timerInterval = useRef<NodeJS.Timeout>();
   const metricsInterval = useRef<NodeJS.Timeout>();
 
-  // For throttling vibration/notification alerts
+  // For throttling vibration/notification alerts (phone)
   const lastAlertTimeRef = useRef<number>(0);
-  // To ensure we send ONE SMS each time score crosses from >=50 to <50
+  // For SMS low-attention trigger
   const lastBelowThresholdRef = useRef<boolean>(false);
+
+  // NEW: for parent email alert (3 drops logic)
+  const emailLowAttentionCountRef = useRef(0);
+  const lastBelowForEmailRef = useRef(false);
 
   const saveSessionMutation = useMutation({
     mutationFn: async (sessionData: any) => {
@@ -149,6 +156,16 @@ export default function ActiveSession() {
 
   const handleStartSession = async () => {
     try {
+      // ⛔ Block starting session if parent email is missing/invalid
+      if (!parentEmail || !parentEmail.includes("@")) {
+        toast({
+          title: "Parent email required",
+          description: "Please enter a valid parent email before starting the session.",
+          variant: "destructive",
+        });
+        return;
+      }
+
       const stream = await navigator.mediaDevices.getUserMedia({ video: true });
       stream.getTracks().forEach((track) => track.stop());
       setCameraPermission("granted");
@@ -178,6 +195,8 @@ export default function ActiveSession() {
       setDataPointCount(0);
       setPendingMetrics([]);
       lastBelowThresholdRef.current = false;
+      emailLowAttentionCountRef.current = 0;
+      lastBelowForEmailRef.current = false;
     } catch (error) {
       setCameraPermission("denied");
       console.error("Error starting session:", error);
@@ -304,6 +323,8 @@ export default function ActiveSession() {
     setPendingMetrics([]);
     currentSessionId.current = "";
     lastBelowThresholdRef.current = false;
+    emailLowAttentionCountRef.current = 0;
+    lastBelowForEmailRef.current = false;
   };
 
   const updateAttentionData = (data: LiveAttentionData) => {
@@ -432,6 +453,68 @@ export default function ActiveSession() {
     }
   }, [liveData.attentionScore, liveData.faceDetected, isSessionActive, isPaused]);
 
+  // 📧 Email to parent when attention drops below 50 three times in this session
+  useEffect(() => {
+    if (!isSessionActive || isPaused) return;
+
+    const score = liveData.attentionScore ?? 0;
+
+    // If no face, reset logic
+    if (!liveData.faceDetected) {
+      emailLowAttentionCountRef.current = 0;
+      lastBelowForEmailRef.current = false;
+      return;
+    }
+
+    const threshold = 50;
+
+    if (score < threshold) {
+      // We only count a "drop" when we cross from >= 50 to < 50
+      if (!lastBelowForEmailRef.current) {
+        lastBelowForEmailRef.current = true;
+        emailLowAttentionCountRef.current += 1;
+
+        console.log(
+          "[FocusBand] Email low-attention count:",
+          emailLowAttentionCountRef.current
+        );
+
+        if (emailLowAttentionCountRef.current >= 3) {
+          // Reset counter so another 3 drops will send another email
+          emailLowAttentionCountRef.current = 0;
+
+          if (parentEmail && parentEmail.includes("@")) {
+            fetch("/api/send-alert-email", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ parentEmail }),
+            })
+              .then((res) => res.json())
+              .then((data) => {
+                if (!data.ok) {
+                  console.error("Email alert failed:", data.error);
+                } else {
+                  console.log("Parent email alert sent");
+                }
+              })
+              .catch((err) => {
+                console.error("Error calling email alert API:", err);
+              });
+          }
+        }
+      }
+    } else {
+      // Back above threshold → next time we go below, count as new drop
+      lastBelowForEmailRef.current = false;
+    }
+  }, [
+    liveData.attentionScore,
+    liveData.faceDetected,
+    isSessionActive,
+    isPaused,
+    parentEmail,
+  ]);
+
   return (
     <div className="min-h-screen bg-background">
       <div className="max-w-7xl mx-auto px-4 py-6 space-y-6">
@@ -443,10 +526,20 @@ export default function ActiveSession() {
               Monitor your attention in real-time
             </p>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex flex-col sm:flex-row items-center gap-3">
+            {/* Parent Email Input */}
+            <input
+              type="email"
+              value={parentEmail}
+              onChange={(e) => setParentEmail(e.target.value)}
+              className="border rounded-md px-3 py-2 text-sm w-64"
+              placeholder="Parent email (for alerts)"
+            />
+
             <Button variant="outline" size="sm" onClick={sendTestAlert}>
               Test Alert
             </Button>
+
             {isSessionActive && (
               <Badge variant="secondary" className="px-3 py-2 text-base font-medium">
                 {formatDuration(sessionDuration)}
