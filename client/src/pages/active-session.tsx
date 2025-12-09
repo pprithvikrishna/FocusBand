@@ -14,11 +14,7 @@ import { useToast } from "@/hooks/use-toast";
 export default function ActiveSession() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  // Student & Parent Info for multi-student tracking
-  const [studentName, setStudentName] = useState("");
-  const [studentGrade, setStudentGrade] = useState("");
-  const [parentName, setParentName] = useState("");
-  const [parentEmail, setParentEmail] = useState("");
+
   const [isSessionActive, setIsSessionActive] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [sessionDuration, setSessionDuration] = useState(0);
@@ -36,12 +32,12 @@ export default function ActiveSession() {
     faceDetected: false,
   });
 
-
   const [allScores, setAllScores] = useState<number[]>([]);
   const [blinkCounter, setBlinkCounter] = useState(0);
   const [eyeOpennessSum, setEyeOpennessSum] = useState(0);
   const [dataPointCount, setDataPointCount] = useState(0);
   const [pendingMetrics, setPendingMetrics] = useState<any[]>([]);
+
   const sessionStartTime = useRef<number>(0);
   const currentSessionId = useRef<string>("");
   const pendingMetricsRef = useRef<any[]>([]);
@@ -64,14 +60,14 @@ export default function ActiveSession() {
       queryClient.invalidateQueries({ queryKey: ["/api/sessions"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       toast({
-        title: "Session Saved",
-        description: "Your attention tracking session has been saved successfully.",
+        title: "Session Created",
+        description: "Your attention tracking session has started.",
       });
     },
     onError: () => {
       toast({
         title: "Error",
-        description: "Failed to save session. Please try again.",
+        description: "Failed to create session. Please try again.",
         variant: "destructive",
       });
     },
@@ -105,12 +101,15 @@ export default function ActiveSession() {
     pendingMetricsRef.current = pendingMetrics;
   }, [pendingMetrics]);
 
+  // Handle session timer + periodic metrics save
   useEffect(() => {
     if (isSessionActive && !isPaused) {
+      // timer
       timerInterval.current = setInterval(() => {
         setSessionDuration(Math.floor((Date.now() - sessionStartTime.current) / 1000));
       }, 1000);
 
+      // periodic batch save
       metricsInterval.current = setInterval(async () => {
         if (isSavingMetricsRef.current) {
           console.log("Skipping batch save - previous save still in progress");
@@ -138,42 +137,26 @@ export default function ActiveSession() {
         }
       }, 10000);
     } else {
-      if (timerInterval.current) {
-        clearInterval(timerInterval.current);
-      }
-      if (metricsInterval.current) {
-        clearInterval(metricsInterval.current);
-      }
+      if (timerInterval.current) clearInterval(timerInterval.current);
+      if (metricsInterval.current) clearInterval(metricsInterval.current);
     }
 
     return () => {
-      if (timerInterval.current) {
-        clearInterval(timerInterval.current);
-      }
-      if (metricsInterval.current) {
-        clearInterval(metricsInterval.current);
-      }
+      if (timerInterval.current) clearInterval(timerInterval.current);
+      if (metricsInterval.current) clearInterval(metricsInterval.current);
     };
-  }, [isSessionActive, isPaused]);
+  }, [isSessionActive, isPaused, saveMetricsMutation]);
 
   const handleStartSession = async () => {
     try {
-      if (!studentName || !studentGrade || !parentName || !parentEmail) {
-        toast({
-          title: "Missing information",
-          description: "Please fill in student and parent details before starting.",
-          variant: "destructive",
-        });
-        return;
-      }
-
       const stream = await navigator.mediaDevices.getUserMedia({ video: true });
       stream.getTracks().forEach((track) => track.stop());
       setCameraPermission("granted");
       sessionStartTime.current = Date.now();
 
+      // Create session on backend
       const sessionData = {
-        startTime: new Date(Date.now()).toISOString(),
+        startTime: new Date().toISOString(),
         endTime: null,
         duration: null,
         averageAttention: null,
@@ -189,13 +172,12 @@ export default function ActiveSession() {
       setIsSessionActive(true);
       setIsPaused(false);
       setSessionDuration(0);
-      setGraphData([]);
       setAllScores([]);
       setBlinkCounter(0);
       setEyeOpennessSum(0);
       setDataPointCount(0);
       setPendingMetrics([]);
-      lastBelowThresholdRef.current = false; // reset SMS trigger state
+      lastBelowThresholdRef.current = false;
     } catch (error) {
       setCameraPermission("denied");
       console.error("Error starting session:", error);
@@ -215,13 +197,17 @@ export default function ActiveSession() {
   };
 
   const handleStopSession = async () => {
+    // Stop accepting new data
     isStoppingRef.current = true;
 
+    // Stop session
     setIsSessionActive(false);
     setIsPaused(false);
 
+    // Give intervals a moment to clear
     await new Promise((resolve) => setTimeout(resolve, 100));
 
+    // Wait for any in-flight batch save
     const maxWaitIterations = 50;
     let waitIterations = 0;
     while (isSavingMetricsRef.current && waitIterations < maxWaitIterations) {
@@ -238,8 +224,8 @@ export default function ActiveSession() {
       });
     }
 
+    // Save final batch
     await new Promise((resolve) => setTimeout(resolve, 100));
-
     const finalMetrics = [...pendingMetrics];
 
     if (finalMetrics.length > 0 && currentSessionId.current) {
@@ -260,6 +246,7 @@ export default function ActiveSession() {
       }
     }
 
+    // Update session with final statistics
     if (sessionDuration > 0 && allScores.length > 0 && currentSessionId.current) {
       const averageAttention =
         allScores.reduce((sum, score) => sum + score, 0) / allScores.length;
@@ -289,32 +276,9 @@ export default function ActiveSession() {
           const errorText = await response.text();
           throw new Error(`Session update failed: ${response.status} ${errorText}`);
         }
-         // ✅ Also save a simple summary locally for Parent Dashboard
-saveSessionToLocalDashboard({
-  studentName,
-  studentGrade,
-  parentName,
-  parentEmail,
-  duration: sessionDuration,
-  averageAttention,
-  endedAt: new Date().toISOString(),
-});
 
         queryClient.invalidateQueries({ queryKey: ["/api/sessions"] });
         queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-        // After successfully updating session on backend, also store a summary locally
-        saveSessionToLocalDashboard({
-          studentName,
-          studentGrade,
-          parentName,
-          parentEmail,
-          startTime: new Date(Date.now() - sessionDuration * 1000).toISOString(),
-          endTime: new Date().toISOString(),
-          duration: sessionDuration,
-          averageAttention,
-          peakAttention,
-          lowestAttention,
-        });
 
         toast({
           title: "Session Complete",
@@ -330,9 +294,9 @@ saveSessionToLocalDashboard({
       }
     }
 
+    // Reset state
     isStoppingRef.current = false;
     setSessionDuration(0);
-    setGraphData([]);
     setAllScores([]);
     setBlinkCounter(0);
     setEyeOpennessSum(0);
@@ -350,7 +314,6 @@ saveSessionToLocalDashboard({
     }
 
     if (isSessionActive && !isPaused && data.faceDetected && currentSessionId.current) {
-
       setAllScores((prev) => [...prev, data.attentionScore]);
       setEyeOpennessSum((prev) => prev + data.eyeOpenness);
       setDataPointCount((prev) => prev + 1);
@@ -359,30 +322,30 @@ saveSessionToLocalDashboard({
         setBlinkCounter((prev) => prev + 1);
       }
 
-      if (currentSessionId.current) {
-        const metric = {
-          sessionId: currentSessionId.current,
-          timestamp: new Date().toISOString(),
-          attentionScore: data.attentionScore,
-          eyeOpenness: data.eyeOpenness,
-          blinkDetected: data.eyeOpenness < 0.15 ? 1 : 0,
-          gazeDirection: data.gazeDirection,
-          headYaw: data.headYaw,
-          headPitch: data.headPitch,
-        };
+      const metric = {
+        sessionId: currentSessionId.current,
+        timestamp: new Date().toISOString(),
+        attentionScore: data.attentionScore,
+        eyeOpenness: data.eyeOpenness,
+        blinkDetected: data.eyeOpenness < 0.15 ? 1 : 0,
+        gazeDirection: data.gazeDirection,
+        headYaw: data.headYaw,
+        headPitch: data.headPitch,
+      };
 
-        setPendingMetrics((prev) => [...prev, metric]);
-      }
+      setPendingMetrics((prev) => [...prev, metric]);
     }
   };
 
   const formatDuration = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
-    return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+    return `${mins.toString().padStart(2, "0")}:${secs
+      .toString()
+      .padStart(2, "0")}`;
   };
 
-  // Test button to manually trigger phone + (maybe) watch alert
+  // Test button to manually trigger phone alert
   const sendTestAlert = () => {
     if ("vibrate" in navigator) {
       try {
@@ -423,7 +386,7 @@ saveSessionToLocalDashboard({
     const threshold = 50;
 
     if (score < threshold) {
-      // ----- Vibration + Notification (with 10s cooldown) -----
+      // Vibration + Notification (10s cooldown)
       if (now - lastAlertTimeRef.current >= 10000) {
         lastAlertTimeRef.current = now;
 
@@ -449,7 +412,7 @@ saveSessionToLocalDashboard({
         }
       }
 
-      // ----- SMS: send ONE time for each drop from >=50 to <50 -----
+      // SMS: send once per drop below threshold
       if (!lastBelowThresholdRef.current) {
         lastBelowThresholdRef.current = true;
         fetch("/api/send-alert-sms", { method: "POST" }).catch((err) => {
@@ -457,7 +420,7 @@ saveSessionToLocalDashboard({
         });
       }
     } else {
-      // Score back to normal: stop vibration & allow next SMS on next drop
+      // Score back to normal
       if ("vibrate" in navigator) {
         try {
           navigator.vibrate(0);
@@ -469,100 +432,32 @@ saveSessionToLocalDashboard({
     }
   }, [liveData.attentionScore, liveData.faceDetected, isSessionActive, isPaused]);
 
-// 🔹 Save a simple summary of the session for the Parent Dashboard
-const saveSessionToLocalDashboard = (summary: {
-  studentName: string;
-  studentGrade: string;
-  parentName: string;
-  parentEmail: string;
-  duration: number;
-  averageAttention: number;
-  endedAt: string;
-}) => {
-  try {
-    const key = "focusband_parent_dashboard_v1";
-    const existingRaw = window.localStorage.getItem(key);
-    const existing = existingRaw ? JSON.parse(existingRaw) : [];
-
-    const updated = [...existing, summary];
-    window.localStorage.setItem(key, JSON.stringify(updated));
-
-    console.log("[FocusBand] Saved session summary:", summary);
-  } catch (err) {
-    console.error("Error saving to parent dashboard:", err);
-  }
-};
-
   return (
     <div className="min-h-screen bg-background">
       <div className="max-w-7xl mx-auto px-4 py-6 space-y-6">
         {/* Header */}
-        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+        <header className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
           <div>
             <h1 className="text-3xl font-semibold text-foreground">Active Session</h1>
             <p className="text-sm text-muted-foreground mt-1">
               Monitor your attention in real-time
             </p>
           </div>
-          
-          <div className="flex flex-col gap-2 items-stretch sm:items-end">
-            {/* Student + Parent Info */}
-            <div className="flex flex-col sm:flex-row gap-2">
-              <input
-                className="border rounded px-2 py-1 text-sm"
-                placeholder="Student name"
-                value={studentName}
-                onChange={(e) => setStudentName(e.target.value)}
-                disabled={isSessionActive}
-              />
-              <input
-                className="border rounded px-2 py-1 text-sm"
-                placeholder="Grade (e.g. 7)"
-                value={studentGrade}
-                onChange={(e) => setStudentGrade(e.target.value)}
-                disabled={isSessionActive}
-              />
-            </div>
-            <div className="flex flex-col sm:flex-row gap-2">
-              <input
-                className="border rounded px-2 py-1 text-sm"
-                placeholder="Parent name"
-                value={parentName}
-                onChange={(e) => setParentName(e.target.value)}
-                disabled={isSessionActive}
-              />
-              <input
-                className="border rounded px-2 py-1 text-sm"
-                placeholder="Parent email"
-                value={parentEmail}
-                onChange={(e) => setParentEmail(e.target.value)}
-                disabled={isSessionActive}
-              />
-            </div>
-        
-            {/* Test alert + timer */}
-            <div className="flex items-center gap-3 justify-end">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={sendTestAlert}
-              >
-                Test Phone + Watch Alert
-              </Button>
-        
-              {isSessionActive && (
-                <Badge variant="secondary" className="px-3 py-2 text-base font-medium">
-                  {formatDuration(sessionDuration)}
-                </Badge>
-              )}
-            </div>
+          <div className="flex items-center gap-3">
+            <Button variant="outline" size="sm" onClick={sendTestAlert}>
+              Test Alert
+            </Button>
+            {isSessionActive && (
+              <Badge variant="secondary" className="px-3 py-2 text-base font-medium">
+                {formatDuration(sessionDuration)}
+              </Badge>
+            )}
           </div>
-        </div>
-
+        </header>
 
         {/* Main Content */}
         <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
-          {/* Left Column - Camera Feed (60%) */}
+          {/* Left Column - Camera Feed */}
           <div className="lg:col-span-3 space-y-6">
             <Card className="p-6">
               <div className="space-y-4">
@@ -649,10 +544,9 @@ const saveSessionToLocalDashboard = (summary: {
                 )}
               </div>
             </Card>
-
           </div>
 
-          {/* Right Column - Metrics (40%) */}
+          {/* Right Column - Metrics */}
           <div className="lg:col-span-2 space-y-6">
             <AttentionScoreDisplay
               score={liveData.attentionScore}
@@ -685,7 +579,6 @@ const saveSessionToLocalDashboard = (summary: {
                       {formatDuration(sessionDuration)}
                     </span>
                   </div>
-                  
                 </div>
               </Card>
             )}
