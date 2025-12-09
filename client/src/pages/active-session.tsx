@@ -5,7 +5,6 @@ import { Badge } from "@/components/ui/badge";
 import { Play, Pause, Square, Video, VideoOff } from "lucide-react";
 import { CameraFeed } from "@/components/camera-feed";
 import { AttentionScoreDisplay } from "@/components/attention-score-display";
-import { LiveGraph } from "@/components/live-graph";
 import { MetricsGrid } from "@/components/metrics-grid";
 import type { LiveAttentionData } from "@shared/schema";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -37,9 +36,7 @@ export default function ActiveSession() {
     faceDetected: false,
   });
 
-  const [graphData, setGraphData] = useState<Array<{ time: number; score: number }>>(
-    [],
-  );
+
   const [allScores, setAllScores] = useState<number[]>([]);
   const [blinkCounter, setBlinkCounter] = useState(0);
   const [eyeOpennessSum, setEyeOpennessSum] = useState(0);
@@ -353,10 +350,6 @@ saveSessionToLocalDashboard({
     }
 
     if (isSessionActive && !isPaused && data.faceDetected && currentSessionId.current) {
-      setGraphData((prev) => {
-        const newData = [...prev, { time: sessionDuration, score: data.attentionScore }];
-        return newData.slice(-60);
-      });
 
       setAllScores((prev) => [...prev, data.attentionScore]);
       setEyeOpennessSum((prev) => prev + data.eyeOpenness);
@@ -657,13 +650,6 @@ const saveSessionToLocalDashboard = (summary: {
               </div>
             </Card>
 
-            {/* Live Graph */}
-            <Card className="p-6">
-              <h2 className="text-xl font-semibold text-card-foreground mb-4">
-                Attention Timeline
-              </h2>
-              <LiveGraph data={graphData} />
-            </Card>
           </div>
 
           {/* Right Column - Metrics (40%) */}
@@ -699,12 +685,7 @@ const saveSessionToLocalDashboard = (summary: {
                       {formatDuration(sessionDuration)}
                     </span>
                   </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Data Points</span>
-                    <span className="font-medium text-card-foreground">
-                      {graphData.length}
-                    </span>
-                  </div>
+                  
                 </div>
               </Card>
             )}
