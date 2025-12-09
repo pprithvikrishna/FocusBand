@@ -8,14 +8,12 @@ import Dashboard from "@/pages/dashboard";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Brain, LayoutDashboard, Activity } from "lucide-react";
 import { Button } from "@/components/ui/button";
-// import ParentDashboard from "@/pages/parent-dashboard";
 
 function Router() {
   return (
     <Switch>
       <Route path="/" component={ActiveSession} />
       <Route path="/dashboard" component={Dashboard} />
-      <Route path="/parent-dashboard" component={ParentDashboard} />
       <Route component={ActiveSession} />
     </Switch>
   );
@@ -52,11 +50,7 @@ function App() {
                       Dashboard
                     </Button>
                   </Link>
-                  <Link href="/parent-dashboard">
-                    <Button variant="ghost" size="sm">
-                      Parent Dashboard
-                    </Button>
-                  </Link>
+                  
 
                 </nav>
               </div>
