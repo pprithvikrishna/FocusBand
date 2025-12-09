@@ -12,8 +12,13 @@ import { Button } from "@/components/ui/button";
 function Router() {
   return (
     <Switch>
+      {/* Main session page */}
       <Route path="/" component={ActiveSession} />
+
+      {/* Existing stats dashboard */}
       <Route path="/dashboard" component={Dashboard} />
+
+      {/* Fallback route */}
       <Route component={ActiveSession} />
     </Switch>
   );
@@ -28,6 +33,7 @@ function App() {
           <header className="sticky top-0 z-50 w-full border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
             <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
               <div className="flex items-center gap-6">
+                {/* Logo + Title */}
                 <Link href="/" className="flex items-center gap-2">
                   <div className="p-2 bg-primary rounded-lg">
                     <Brain className="w-5 h-5 text-primary-foreground" />
@@ -36,31 +42,43 @@ function App() {
                     Attention Analyzer
                   </span>
                 </Link>
-                
+
+                {/* Navigation buttons */}
                 <nav className="flex items-center gap-2">
                   <Link href="/">
-                    <Button variant="ghost" size="sm" data-testid="link-session">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      data-testid="link-session"
+                    >
                       <Activity className="w-4 h-4 mr-2" />
                       Session
                     </Button>
                   </Link>
+
                   <Link href="/dashboard">
-                    <Button variant="ghost" size="sm" data-testid="link-dashboard">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      data-testid="link-dashboard"
+                    >
                       <LayoutDashboard className="w-4 h-4 mr-2" />
                       Dashboard
                     </Button>
                   </Link>
-                  
-
                 </nav>
               </div>
 
+              {/* Dark/Light mode toggle */}
               <ThemeToggle />
             </div>
           </header>
 
+          {/* Page content */}
           <Router />
         </div>
+
+        {/* Toast notifications (for success/error messages) */}
         <Toaster />
       </TooltipProvider>
     </QueryClientProvider>
